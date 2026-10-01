@@ -104,7 +104,20 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 	if err != nil {
 		return nil, err
 	}
-	aerationController, err := aeration.NewController(decoder, windows, fleet)
+	lineStates := make(map[model.LineID]model.LineState, len(lines))
+	for _, lineID := range lines {
+		lineStates[lineID] = model.NewLineState(lineID, now())
+	}
+	sampler := sensor.NewSampler()
+	policyBook, err := aeration.NewPolicyBook(aeration.DefaultPolicy())
+	if err != nil {
+		return nil, err
+	}
+	stageOf := func(lineID model.LineID) (model.ProcessStage, uint64, bool) {
+		state, ok := lineStates[lineID]
+		return state.Stage, state.Generation, ok
+	}
+	aerationController, err := aeration.NewController(decoder, windows, fleet, policyBook, sampler, stageOf)
 	if err != nil {
 		return nil, err
 	}
@@ -139,9 +152,8 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 	if err != nil {
 		return nil, err
 	}
-	sampler := sensor.NewSampler()
 	plant := &Plant{
-		now: now, lines: make(map[model.LineID]model.LineState), batches: make(map[uuid.UUID]model.Batch),
+		now: now, lines: lineStates, batches: make(map[uuid.UUID]model.Batch),
 		lineBatches: make(map[model.LineID]uuid.UUID), store: store, snapshots: snapshots,
 		intake: intakeController, equalizers: pool, aeration: aerationController, dosing: dosingService,
 		labResults: lab.NewResults(), permits: permits, valves: valves, alarms: alarm.NewService(),
@@ -150,7 +162,6 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 		sequences: sequences, compensations: queue, devices: devices, sampler: sampler, receiver: receiver,
 	}
 	for _, lineID := range lines {
-		plant.lines[lineID] = model.NewLineState(lineID, now())
 		listener := alarm.NewBlanketListener(plant.alarms, now)
 		state, stateErr := settling.NewState(lineID, "settler-"+string(lineID), listener)
 		if stateErr != nil {
@@ -160,8 +171,11 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 		plant.settling[lineID] = state
 	}
 	if err := sampler.Subscribe(func(sample model.Sample) {
-		if sample.Kind == model.SampleSludgeBlanket {
+		switch sample.Kind {
+		case model.SampleSludgeBlanket:
 			_, _ = plant.UpdateBlanket(sample.LineID, sample.Value)
+		case model.SampleDissolvedOxygen:
+			plant.handleDissolvedOxygen(sample)
 		}
 	}); err != nil {
 		return nil, err

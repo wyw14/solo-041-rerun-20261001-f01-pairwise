@@ -50,6 +50,7 @@ func (s *Server) routes() http.Handler {
 		api.Get("/process-lines/{lineID}", s.lineStatus)
 		api.Get("/aeration", s.aerationStatus)
 		api.Post("/aeration/{lineID}/{basinID}/samples", s.aerationSample)
+		api.Post("/aeration/{lineID}/config", s.aerationConfig)
 		api.Get("/sludge", s.sludgeStatus)
 		api.Post("/sludge/{lineID}/handover", s.startHandover)
 		api.Post("/sludge/{lineID}/handover/ready", s.confirmHandover)

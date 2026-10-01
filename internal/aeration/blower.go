@@ -10,11 +10,12 @@ import (
 )
 
 type Blower struct {
-	ID        string    `json:"id"`
-	BasinID   string    `json:"basin_id"`
-	Frequency float64   `json:"frequency"`
-	Running   bool      `json:"running"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	BasinID       string    `json:"basin_id"`
+	Frequency     float64   `json:"frequency"`
+	Running       bool      `json:"running"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	LastCommandAt time.Time `json:"last_command_at"`
 }
 
 type BlowerFleet struct {
@@ -46,11 +47,20 @@ func (f *BlowerFleet) Apply(command model.DeviceCommand, now time.Time) (Blower,
 	if command.Setpoint < 0 || command.Setpoint > 60 {
 		return Blower{}, errors.New("blower frequency is outside operating range")
 	}
+	stamp := now.UTC()
 	blower.Frequency = command.Setpoint
 	blower.Running = command.Setpoint > 0
-	blower.UpdatedAt = now.UTC()
+	blower.UpdatedAt = stamp
+	blower.LastCommandAt = stamp
 	f.blowers[blower.ID] = blower
 	return blower, nil
+}
+
+func (f *BlowerFleet) Get(deviceID string) (Blower, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	blower, ok := f.blowers[deviceID]
+	return blower, ok
 }
 
 func (f *BlowerFleet) Snapshot() []Blower {
