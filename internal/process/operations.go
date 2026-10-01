@@ -12,14 +12,52 @@ import (
 	"github.com/wyw14/cry-97/internal/settling"
 )
 
-func (p *Plant) SubmitAeration(ctx context.Context, lineID model.LineID, basinID string, payload []byte) (aeration.Window, *model.DeviceCommand, error) {
+// aerationLineContext builds the decision inputs derived from the process
+// line: the active batch stage when one exists, plus the command generation.
+func (p *Plant) aerationLineContext(lineID model.LineID) (aeration.LineContext, error) {
 	p.mu.RLock()
 	state, ok := p.lines[lineID]
 	p.mu.RUnlock()
 	if !ok || state.Emergency {
-		return aeration.Window{}, nil, errors.New("process line cannot accept aeration samples")
+		return aeration.LineContext{}, errors.New("process line cannot accept aeration control")
 	}
-	return p.aeration.SubmitWindow(ctx, lineID, basinID, payload, state.Generation, p.now())
+	line := aeration.LineContext{LineID: lineID, Stage: state.Stage, Generation: state.Generation}
+	if batch, hasBatch := p.ActiveBatch(lineID); hasBatch && batch.IsActive() {
+		line.Stage = batch.Stage
+		line.HasBatch = true
+	}
+	return line, nil
+}
+
+func (p *Plant) SubmitAeration(ctx context.Context, lineID model.LineID, basinID string, payload []byte) (aeration.SubmitOutcome, error) {
+	line, err := p.aerationLineContext(lineID)
+	if err != nil {
+		return aeration.SubmitOutcome{}, err
+	}
+	return p.aeration.SubmitWindow(ctx, lineID, basinID, payload, line, p.now())
+}
+
+// EvaluateAeration runs one closed-loop blower decision for every healthy
+// line. Lines under emergency isolation are left to the interlock stop.
+func (p *Plant) EvaluateAeration(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var errs []error
+	for _, state := range p.Lines() {
+		if state.Emergency {
+			continue
+		}
+		line, err := p.aerationLineContext(state.ID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if _, _, err := p.aeration.Evaluate(ctx, state.ID, "basin-"+string(state.ID), line, p.now()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (p *Plant) ChangeDose(ctx context.Context, lineID model.LineID, batchID uuid.UUID, chemical string, rate float64) (model.DeviceCommand, error) {
@@ -74,6 +112,22 @@ func (p *Plant) StatusBlowers() []aeration.Blower {
 
 func (p *Plant) StatusAerationWindows() []aeration.Window {
 	return p.aeration.Windows()
+}
+
+func (p *Plant) StatusAerationDecisions() []aeration.Decision {
+	return p.aeration.Decisions()
+}
+
+func (p *Plant) AerationPolicies() []aeration.LinePolicy {
+	return p.aeration.Policies()
+}
+
+func (p *Plant) AerationPolicy(lineID model.LineID) (aeration.LinePolicy, bool) {
+	return p.aeration.Policy(lineID)
+}
+
+func (p *Plant) ConfigureAerationPolicy(policy aeration.LinePolicy) error {
+	return p.aeration.ConfigurePolicy(policy)
 }
 
 func (p *Plant) AcknowledgeAlarm(id uuid.UUID) (model.Alarm, error) {

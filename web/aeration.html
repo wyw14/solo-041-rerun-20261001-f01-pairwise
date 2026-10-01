@@ -2,9 +2,33 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BioTreat 曝气调节</title><link rel="stylesheet" href="/assets/app.css"></head>
 <body><header><div class="brand">BioTreat 工艺联控</div><nav><a href="/process">工艺总控</a><a aria-current="page" href="/aeration">曝气调节</a><a href="/sludge">污泥回流</a><a href="/alarms">异常处置</a></nav></header>
-<main><div class="page-head"><div><h1>曝气稳定窗口</h1><div class="muted">按生化池隔离采样并下发风机目标</div></div><div class="status"><span class="dot"></span><span id="health">checking</span></div></div>
-<div class="grid"><section class="panel wide"><h2>风机与窗口</h2><div class="rows" id="aeration"></div></section><section class="panel"><h2>提交溶氧批次</h2><form id="sample"><label>处理线<select name="line"><option>line-1</option><option>line-2</option><option>line-3</option></select></label><label>生化池<input name="basin" value="basin-line-1"></label><label>最近采样<input name="values" value="2.0,2.1,2.2,2.1,2.0"></label><button>刷新稳定窗口</button></form></section><section class="panel wide"><h2>控制结果</h2><pre id="output">等待采样</pre></section></div></main>
+<main><div class="page-head"><div><h1>曝气闭环调节</h1><div class="muted">按批次阶段、最新溶氧与风机状态决策；传感器失效时保持安全设定</div></div><div class="status"><span class="dot"></span><span id="health">checking</span></div></div>
+<div class="grid">
+<section class="panel wide"><h2>风机与窗口</h2><div class="rows" id="aeration"></div></section>
+<section class="panel"><h2>提交溶氧批次</h2><form id="sample"><label>处理线<select name="line"><option>line-1</option><option>line-2</option><option>line-3</option></select></label><label>生化池<input name="basin" value="basin-line-1"></label><label>最近采样<input name="values" value="2.0,2.1,2.2,2.1,2.0"></label><button>提交并评估</button></form></section>
+<section class="panel wide"><h2>决策理由</h2><div class="rows" id="decisions"><div class="muted">暂无决策</div></div></section>
+<section class="panel"><h2>控制策略（按处理线）</h2><div class="rows" id="policies"></div><form id="policy"><label>处理线<select name="line"><option>line-1</option><option>line-2</option><option>line-3</option></select></label><label>目标下限 mg/L<input name="target_min" type="number" step="0.1" min="0"></label><label>目标上限 mg/L<input name="target_max" type="number" step="0.1" min="0"></label><label>最大调节步长 Hz<input name="max_step" type="number" step="0.5" min="0.5"></label><label>安全频率 Hz<input name="safe_frequency" type="number" step="1" min="0" max="60"></label><label>怠速频率 Hz<input name="idle_frequency" type="number" step="1" min="0" max="60"></label><label>样本有效期 秒<input name="sample_max_age_seconds" type="number" step="1" min="1"></label><button>保存策略</button></form></section>
+<section class="panel wide"><h2>控制结果</h2><pre id="output">等待采样</pre></section>
+</div></main>
 <script src="/assets/common.js"></script><script>
-async function load(){const d=await request('/api/aeration');document.querySelector('#aeration').innerHTML=d.blowers.map(b=>`<div class="row"><span>${b.id} · ${b.basin_id}</span><strong>${b.frequency||0} Hz</strong></div>`).join('')}
-document.querySelector('#sample').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);const values=String(f.get('values')).split(',').map(Number);try{show(await request(`/api/aeration/${f.get('line')}/${f.get('basin')}/samples`,{method:'POST',body:JSON.stringify(values)}));load()}catch(err){showError(err)}});load().catch(showError);
+const SAMPLE_STATE={ok:'有效',missing:'缺失',invalid:'无效',stale:'过期'};
+let policies=[];
+function policyFor(line){return policies.find(p=>p.line_id===line)}
+async function load(){
+  const d=await request('/api/aeration');
+  policies=d.policies||[];
+  const windows=Object.fromEntries((d.windows||[]).map(w=>[w.basin_id,w]));
+  document.querySelector('#aeration').innerHTML=d.blowers.map(b=>{
+    const w=windows[b.basin_id];
+    const win=w?`窗口均值 ${w.average.toFixed(2)} mg/L${w.stable?' · 稳定':' · 波动'}`:'暂无窗口';
+    return `<div class="row"><span>${b.id} · ${b.basin_id}<div class="muted">${win}</div></span><strong>${b.frequency||0} Hz ${b.running?'运行':'停机'}</strong></div>`}).join('');
+  const ds=d.decisions||[];
+  document.querySelector('#decisions').innerHTML=ds.length?ds.map(x=>`<div class="row"><div><strong>${x.line_id}</strong> · ${x.stage}${x.has_batch?'':' · 无批次'} · 样本${SAMPLE_STATE[x.sample_state]||x.sample_state}${x.sample_state==='ok'?` ${x.sample_value} mg/L`:''}<div class="muted">${x.reasons.join('；')}</div><div class="muted">${new Date(x.decided_at).toLocaleString()}</div></div><strong>${x.previous_frequency} → ${x.target_frequency} Hz</strong></div>`).join(''):'<div class="muted">暂无决策</div>';
+  document.querySelector('#policies').innerHTML=policies.map(p=>`<div class="row"><span>${p.line_id}</span><span class="muted">目标 ${p.target_min}–${p.target_max} mg/L · 步长 ${p.max_step} Hz · 安全 ${p.safe_frequency} Hz · 怠速 ${p.idle_frequency} Hz · 样本 ${p.sample_max_age_seconds}s</span></div>`).join('');
+}
+function prefill(){const p=policyFor(document.querySelector('#policy select[name=line]').value);if(!p)return;const f=document.querySelector('#policy');for(const k of['target_min','target_max','max_step','safe_frequency','idle_frequency','sample_max_age_seconds'])f.elements[k].value=p[k]}
+document.querySelector('#policy select[name=line]').addEventListener('change',prefill);
+document.querySelector('#sample').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);const values=String(f.get('values')).split(',').map(Number);try{show(await request(`/api/aeration/${f.get('line')}/${f.get('basin')}/samples`,{method:'POST',body:JSON.stringify(values)}));load()}catch(err){showError(err)}});
+document.querySelector('#policy').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);const body={};for(const k of['target_min','target_max','max_step','safe_frequency','idle_frequency','sample_max_age_seconds'])body[k]=Number(f.get(k));try{show(await request(`/api/aeration/policies/${f.get('line')}`,{method:'PUT',body:JSON.stringify(body)}));load()}catch(err){showError(err)}});
+load().then(prefill).catch(showError);setInterval(()=>load().catch(showError),5000);
 </script></body></html>

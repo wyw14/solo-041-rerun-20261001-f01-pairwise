@@ -67,6 +67,20 @@ func run() error {
 			}
 		}
 	}()
+	go func() {
+		ticker := time.NewTicker(cfg.AerationInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-maintenanceContext.Done():
+				return
+			case <-ticker.C:
+				if runErr := plant.EvaluateAeration(maintenanceContext); runErr != nil && !errors.Is(runErr, context.Canceled) {
+					log.Printf("aeration evaluation: %v", runErr)
+				}
+			}
+		}
+	}()
 	go func() { serveErrors <- server.ListenAndServe() }()
 	log.Printf("BioTreat listening on http://%s", cfg.Address)
 	signals := make(chan os.Signal, 1)

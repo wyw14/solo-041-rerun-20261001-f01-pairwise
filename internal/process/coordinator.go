@@ -104,7 +104,11 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 	if err != nil {
 		return nil, err
 	}
-	aerationController, err := aeration.NewController(decoder, windows, fleet)
+	policies, err := aeration.NewPolicyBook(lines)
+	if err != nil {
+		return nil, err
+	}
+	aerationController, err := aeration.NewController(decoder, windows, fleet, policies)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +166,13 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 	if err := sampler.Subscribe(func(sample model.Sample) {
 		if sample.Kind == model.SampleSludgeBlanket {
 			_, _ = plant.UpdateBlanket(sample.LineID, sample.Value)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	if err := sampler.Subscribe(func(sample model.Sample) {
+		if sample.Kind == model.SampleDissolvedOxygen {
+			aerationController.ObserveSample(sample)
 		}
 	}); err != nil {
 		return nil, err

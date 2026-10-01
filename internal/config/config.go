@@ -10,20 +10,22 @@ import (
 )
 
 type Config struct {
-	Address         string
-	DataDir         string
-	WebDir          string
-	ShutdownTimeout time.Duration
-	SampleWindow    int
+	Address          string
+	DataDir          string
+	WebDir           string
+	ShutdownTimeout  time.Duration
+	SampleWindow     int
+	AerationInterval time.Duration
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Address:         env("BIOTREAT_ADDR", "127.0.0.1:19697"),
-		DataDir:         env("BIOTREAT_DATA", filepath.Join("data", "events")),
-		WebDir:          env("BIOTREAT_WEB", "web"),
-		ShutdownTimeout: 8 * time.Second,
-		SampleWindow:    10,
+		Address:          env("BIOTREAT_ADDR", "127.0.0.1:19697"),
+		DataDir:          env("BIOTREAT_DATA", filepath.Join("data", "events")),
+		WebDir:           env("BIOTREAT_WEB", "web"),
+		ShutdownTimeout:  8 * time.Second,
+		SampleWindow:     10,
+		AerationInterval: 5 * time.Second,
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -43,6 +45,9 @@ func (c Config) Validate() error {
 	}
 	if c.SampleWindow < 3 || c.SampleWindow > 120 {
 		return errors.New("sample window must be between 3 and 120")
+	}
+	if c.AerationInterval <= 0 || c.AerationInterval > time.Minute {
+		return errors.New("aeration evaluation interval must be between 0 and 1 minute")
 	}
 	return nil
 }

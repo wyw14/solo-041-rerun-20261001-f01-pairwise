@@ -36,6 +36,13 @@ func NewBlowerFleet(blowers []Blower) (*BlowerFleet, error) {
 	return fleet, nil
 }
 
+func (f *BlowerFleet) Get(id string) (Blower, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	blower, ok := f.blowers[id]
+	return blower, ok
+}
+
 func (f *BlowerFleet) Apply(command model.DeviceCommand, now time.Time) (Blower, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
